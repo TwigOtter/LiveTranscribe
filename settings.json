@@ -1,0 +1,19 @@
+{
+  "speaker_name": "TwigOtter",
+  "streamerbot_url": "http://127.0.0.1:7474/DoAction",
+  "streamerbot_action_name": "LiveTranscribe",
+  "replacements": {
+    "barry's": "Berries'",
+    "barry": "Berries"
+  },
+  "model": "large-v3",
+  "device_name": null,
+  "language": "en",
+  "compute_type": "float16",
+  "sample_rate": 16000,
+  "silence_duration_ms": 1500,
+  "max_buffer_seconds": 15,
+  "vad_threshold": 0.5,
+  "output_file": "live_transcript.jsonl",
+  "debug": false
+}

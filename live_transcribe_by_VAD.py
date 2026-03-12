@@ -3,14 +3,13 @@ Live transcription using Voice Activity Detection (VAD) to trigger transcription
 
 Instead of transcribing on fixed time intervals with overlapping windows,
 this approach accumulates audio continuously and only transcribes when:
-1. Silence is detected for 2+ seconds, OR
-2. A maximum duration (30s) is reached without silence
+1. Silence is detected for 1.5+ seconds, OR
+2. A maximum duration (20s) is reached without silence
 
 This produces clean, sentence-based transcriptions with no duplicates.
 """
 
 import argparse
-from doctest import debug
 import queue
 import re
 import sys
@@ -25,12 +24,21 @@ import sounddevice as sd
 from faster_whisper import WhisperModel
 from silero_vad import load_silero_vad, get_speech_timestamps
 
-# Word replacements for commonly misunderstood transcriptions
-# Lookup is case-insensitive, but replacement preserves the specified casing
-WORD_REPLACEMENTS = {
-    "barry's": "Berries'",
-    "barry": "Berries",
-}
+# Load settings.json — users can edit this file to configure the script without touching code.
+def _load_settings() -> dict:
+    try:
+        with open("settings.json", "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print("[warning] settings.json not found. Using built-in defaults.")
+        return {}
+    except json.JSONDecodeError as e:
+        print(f"[warning] settings.json is invalid JSON: {e}. Using built-in defaults.")
+        return {}
+
+_SETTINGS = _load_settings()
+# Word replacements: case-insensitive lookup, replacement preserves specified casing
+WORD_REPLACEMENTS = _SETTINGS.get("replacements", {})
 
 def list_devices_and_exit():
     """List all available input audio devices and exit."""
@@ -86,23 +94,44 @@ def apply_word_replacements(text: str) -> str:
         result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
     return result
 
-def post_to_streamerbot(transcribed_text: str, url: str = "http://192.168.1.214:7474/DoAction"):
+def post_to_streamerbot(transcribed_text: str, speaker_name: str, url: str, action_name: str):
     data = {
-    "action": {
-        "id": "05d6af77-9ed2-4771-be77-1e666955873d",
-    },
-    "args": {
-        "speaker": "TwigOtter",
-        "message": transcribed_text
-    }
+        "action": {
+            "name": action_name,
+        },
+        "args": {
+            "speaker": speaker_name,
+            "message": transcribed_text
+        }
     }
 
-    response = requests.post(
-        url,
-        headers={'Content-Type': 'application/json'},
-        data=json.dumps(data)
-    )
-    print("POST RESPONSE: " + str(response.status_code))
+    try:
+        response = requests.post(
+            url,
+            headers={'Content-Type': 'application/json'},
+            data=json.dumps(data),
+            timeout=5
+        )
+        print("POST RESPONSE: " + str(response.status_code))
+    except requests.exceptions.RequestException as e:
+        print(f"[warning] Failed to post to StreamerBot: {e}")
+
+def log_to_jsonl(transcribed_text: str, file_path: str, speaker: str):
+    """
+    Log a transcription entry to a JSONL file.
+
+    Args:
+        transcribed_text: The transcribed text to log.
+        file_path: Output JSONL file path.
+        speaker: Speaker name for the transcription.
+    """
+    log_entry = {
+        "ts": datetime.now().isoformat() + "Z",
+        "speaker": speaker,
+        "text": transcribed_text.strip()
+    }
+    with open(file_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(log_entry) + "\n")
 
 def main():
     """
@@ -116,68 +145,79 @@ def main():
         description="Live transcription using faster-whisper with VAD-triggered batching."
     )
     argument_parser.add_argument(
-        "--speaker",
-        default="TwigOtter",
-        help="Name of the speaker (default: TwigOtter)"
+        "-n", "--speaker-name",
+        default=_SETTINGS.get("speaker_name", "TwigOtter"),
+        help="Name of the speaker. Overrides settings.json."
     )
     argument_parser.add_argument(
-        "--model", 
-        default="large-v3", 
-        help="faster-whisper model size or path (tiny, base, small, medium, large-v3, etc.)"
+        "--url",
+        default=_SETTINGS.get("streamerbot_url", "http://127.0.0.1:7474/DoAction"),
+        help="StreamerBot webhook URL. Overrides settings.json."
     )
     argument_parser.add_argument(
-        "--device-name", 
-        default=None, 
-        help="Substring of input device name (e.g., 'CABLE Output'). Use --list-devices to discover."
+        "--action-name",
+        default=_SETTINGS.get("streamerbot_action_name", "LiveTranscribe"),
+        help="StreamerBot action name to invoke. Overrides settings.json."
     )
     argument_parser.add_argument(
-        "--list-devices", 
-        action="store_true", 
+        "-m", "--model",
+        default=_SETTINGS.get("model", "large-v3"),
+        help="faster-whisper model size or path (tiny, base, small, medium, large-v3, etc.). Overrides settings.json."
+    )
+    argument_parser.add_argument(
+        "-d", "--device-name",
+        default=_SETTINGS.get("device_name", None),
+        help="Substring of input device name (e.g., 'CABLE Output'). Use --list-devices to discover. Overrides settings.json."
+    )
+    argument_parser.add_argument(
+        "-l", "--list-devices",
+        action="store_true",
         help="List input devices and exit."
     )
     argument_parser.add_argument(
-        "--sample-rate", 
-        type=int, 
-        default=16000, 
-        help="Target sample rate for ASR (Hz)."
+        "-r", "--sample-rate",
+        type=int,
+        default=_SETTINGS.get("sample_rate", 16000),
+        help="Target sample rate for ASR (Hz). Overrides settings.json."
     )
     argument_parser.add_argument(
-        "--language", 
-        default="en", 
-        help="Force language code (e.g., en). If omitted, model will auto-detect."
+        "--language",
+        default=_SETTINGS.get("language", "en"),
+        help="Force language code (e.g., en). Overrides settings.json."
     )
     argument_parser.add_argument(
-        "--compute-type", 
-        default="float16", 
-        help="e.g., int8, int8_float16, float16, float32 (GPU/CPU dependent)."
+        "-c", "--compute-type",
+        default=_SETTINGS.get("compute_type", "float16"),
+        help="e.g., int8, int8_float16, float16, float32 (GPU/CPU dependent). Overrides settings.json."
     )
     argument_parser.add_argument(
-        "--silence-duration-ms",
+        "-s", "--silence-duration-ms",
         type=float,
-        default=1500.0,
-        help="Duration of silence (ms) to trigger transcription. Default: 1500ms (1.5 seconds)."
+        default=_SETTINGS.get("silence_duration_ms", 1500.0),
+        help="Duration of silence (ms) to trigger transcription. Overrides settings.json."
     )
     argument_parser.add_argument(
-        "--max-buffer-seconds",
+        "-b", "--max-buffer-seconds",
         type=float,
-        default=15.0,
-        help="Maximum seconds of audio to accumulate before forcing transcription. Default: 15 seconds."
+        default=_SETTINGS.get("max_buffer_seconds", 15.0),
+        help="Maximum seconds of audio to accumulate before forcing transcription. Overrides settings.json."
     )
     argument_parser.add_argument(
-        "--vad-threshold",
+        "-v", "--vad-threshold",
         type=float,
-        default=0.5,
-        help="VAD probability threshold (0-1). Higher = stricter (less false positives). Default: 0.5"
+        default=_SETTINGS.get("vad_threshold", 0.5),
+        help="VAD probability threshold (0-1). Higher = stricter (less false positives). Overrides settings.json."
     )
     argument_parser.add_argument(
-        "--debug",
+        "-x", "--debug",
         action="store_true",
-        help="Enable verbose debug logging."
+        default=_SETTINGS.get("debug", False),
+        help="Enable verbose debug logging. Overrides settings.json."
     )
     argument_parser.add_argument(
-        "--output-file",
-        default="live_transcript.jsonl",
-        help="Output JSONL file for transcriptions. Default: live_transcript.jsonl"
+        "-o", "--output-file",
+        default=_SETTINGS.get("output_file", "live_transcript.jsonl"),
+        help="Output JSONL file for transcriptions. Overrides settings.json."
     )
     parsed_args = argument_parser.parse_args()
     debug = parsed_args.debug
@@ -456,7 +496,8 @@ def main():
                                 print(f"[transcribe] After replacements: {repr(transcribed_text)}", flush=True)
                             
                             print(f"[result] {transcribed_text}")
-                            post_to_streamerbot(transcribed_text)
+                            post_to_streamerbot(transcribed_text, parsed_args.speaker_name, parsed_args.url, parsed_args.action_name)
+                            log_to_jsonl(transcribed_text, parsed_args.output_file, parsed_args.speaker_name)
                             speech_detected_in_buffer = False  # Reset for next cycle
                             if debug:
                                 print(f"[result] Logged to JSONL and StreamerBot", flush=True)

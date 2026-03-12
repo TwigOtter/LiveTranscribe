@@ -1,0 +1,6 @@
+numpy
+sounddevice
+faster-whisper
+silero-vad
+requests
+torch
