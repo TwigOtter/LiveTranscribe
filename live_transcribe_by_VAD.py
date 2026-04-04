@@ -23,6 +23,7 @@ import numpy as np
 import sounddevice as sd
 from faster_whisper import WhisperModel
 from silero_vad import load_silero_vad, get_speech_timestamps
+from pynput import keyboard as kb
 
 # Load settings.json — users can edit this file to configure the script without touching code.
 def _load_settings() -> dict:
@@ -94,14 +95,16 @@ def apply_word_replacements(text: str) -> str:
         result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
     return result
 
-def post_to_streamerbot(transcribed_text: str, speaker_name: str, url: str, action_name: str):
+def post_to_streamerbot(transcribed_text: str, speaker_name: str, url: str, action_id: str = "", action_name: str = "", extra_args: dict = None):
     data = {
         "action": {
+            "id": action_id,
             "name": action_name,
         },
         "args": {
             "speaker": speaker_name,
-            "message": transcribed_text
+            "message": transcribed_text,
+            **(extra_args or {})
         }
     }
 
@@ -153,6 +156,11 @@ def main():
         "--url",
         default=_SETTINGS.get("streamerbot_url", "http://127.0.0.1:7474/DoAction"),
         help="StreamerBot webhook URL. Overrides settings.json."
+    )
+    argument_parser.add_argument(
+        "--action-id",
+        default=_SETTINGS.get("streamerbot_action_id", "05d6af77-9ed2-4771-be77-1e666955873d"),
+        help="StreamerBot action ID to invoke. Overrides settings.json."
     )
     argument_parser.add_argument(
         "--action-name",
@@ -219,6 +227,11 @@ def main():
         default=_SETTINGS.get("output_file", "live_transcript.jsonl"),
         help="Output JSONL file for transcriptions. Overrides settings.json."
     )
+    argument_parser.add_argument(
+        "--berries-key",
+        default=_SETTINGS.get("berries_key", "f9"),
+        help="Hotkey to hold for Berries recording (e.g. 'f9', 'scroll_lock'). Overrides settings.json."
+    )
     parsed_args = argument_parser.parse_args()
     debug = parsed_args.debug
 
@@ -269,6 +282,46 @@ def main():
     audio_to_transcribe = None
     transcription_lock = threading.Lock()
     speech_detected_in_buffer = False
+
+    # Hotkey state (list so nested functions can mutate without nonlocal)
+    hotkey_held = threading.Event()
+    is_berries_transcription = [False]
+
+    def _parse_berries_key(key_str: str):
+        key_str_norm = key_str.strip().lower().replace('-', '_').replace(' ', '_')
+        if hasattr(kb.Key, key_str_norm):
+            return getattr(kb.Key, key_str_norm)
+        if len(key_str) == 1:
+            return kb.KeyCode.from_char(key_str)
+        raise ValueError(f"Unknown berries_key: {key_str!r}. Use a special key name (e.g. 'f9', 'scroll_lock') or a single character.")
+
+    berries_target_key = _parse_berries_key(parsed_args.berries_key)
+
+    def _on_key_press(key):
+        nonlocal accumulated_audio, speech_detected_in_buffer
+        if key == berries_target_key and not hotkey_held.is_set():
+            with accumulated_audio_lock:
+                accumulated_audio = np.array([], dtype=np.float32)
+                speech_detected_in_buffer = False
+            hotkey_held.set()
+            print(f"[hotkey] {parsed_args.berries_key.upper()} held — recording for Berries…", flush=True)
+
+    def _on_key_release(key):
+        nonlocal accumulated_audio, speech_detected_in_buffer, audio_to_transcribe
+        if key == berries_target_key and hotkey_held.is_set():
+            hotkey_held.clear()
+            with accumulated_audio_lock:
+                audio_snapshot = accumulated_audio.copy()
+                accumulated_audio = np.array([], dtype=np.float32)
+                speech_detected_in_buffer = False
+            if len(audio_snapshot) > min_audio_samples:
+                with transcription_lock:
+                    audio_to_transcribe = audio_snapshot
+                    is_berries_transcription[0] = True
+                transcription_needed_event.set()
+                print(f"[hotkey] Released — sending {len(audio_snapshot)/sample_rate:.1f}s to Berries.", flush=True)
+            else:
+                print("[hotkey] Released — not enough audio to send.", flush=True)
 
     # Audio callback: enqueue blocks as they arrive
     def audio_callback(indata, frames, time_info, status):
@@ -321,8 +374,8 @@ def main():
                     if debug:
                         print(f"[ingest] Got {len(audio_block)} samples. Buffer: {old_len} → {new_len} samples ({new_len/sample_rate:.2f}s)", flush=True)
                     
-                    # Keep buffer size bounded
-                    if len(accumulated_audio) > max_buffer_samples:
+                    # Keep buffer size bounded (skip during hotkey hold — user controls duration)
+                    if not hotkey_held.is_set() and len(accumulated_audio) > max_buffer_samples:
                         print(f"[vad] Max buffer duration reached during audio accumulation. Forcing transcription.", flush=True)
                         with transcription_lock:
                             audio_to_transcribe = accumulated_audio.copy()
@@ -332,10 +385,10 @@ def main():
                         speech_detected_in_buffer = False  # Reset speech detection flag
                         if debug:
                             print(f"[ingest] Buffer exceeded max, triggered transcription.", flush=True)
-            
-            # Periodically check VAD on the most recent audio chunk
+
+            # Periodically check VAD on the most recent audio chunk (skip during hotkey hold)
             now = time.time()
-            if now - last_vad_check_time >= 0.1:  # Check every 100ms
+            if not hotkey_held.is_set() and now - last_vad_check_time >= 0.1:  # Check every 100ms
                 last_vad_check_time = now
                 check_count += 1
                 
@@ -434,6 +487,11 @@ def main():
     ingest_thread = threading.Thread(target=ingest_and_vad_loop, daemon=True)
     ingest_thread.start()
 
+    # Start keyboard listener for Berries hotkey
+    hotkey_listener = kb.Listener(on_press=_on_key_press, on_release=_on_key_release)
+    hotkey_listener.start()
+    print(f"[info] Berries hotkey: hold {parsed_args.berries_key.upper()} to record, release to send to Berries.")
+
     # Start input stream
     stream = sd.InputStream(
         device=input_device_idx,
@@ -496,7 +554,9 @@ def main():
                                 print(f"[transcribe] After replacements: {repr(transcribed_text)}", flush=True)
                             
                             print(f"[result] {transcribed_text}")
-                            post_to_streamerbot(transcribed_text, parsed_args.speaker_name, parsed_args.url, parsed_args.action_name)
+                            extra = {"berries": "true"} if is_berries_transcription[0] else None
+                            post_to_streamerbot(transcribed_text, parsed_args.speaker_name, parsed_args.url, parsed_args.action_id, extra_args=extra)
+                            is_berries_transcription[0] = False
                             log_to_jsonl(transcribed_text, parsed_args.output_file, parsed_args.speaker_name)
                             speech_detected_in_buffer = False  # Reset for next cycle
                             if debug:
@@ -517,6 +577,10 @@ def main():
         print("\n[info] Stopping…")
     finally:
         thread_stop_event.set()
+        try:
+            hotkey_listener.stop()
+        except Exception:
+            pass
         try:
             stream.stop()
             stream.close()

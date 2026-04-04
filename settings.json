@@ -1,9 +1,10 @@
 {
   "speaker_name": "TwigOtter",
-  "streamerbot_url": "http://127.0.0.1:7474/DoAction",
+  "streamerbot_url": "http://192.168.1.214:7474/DoAction",
   "streamerbot_action_name": "LiveTranscribe",
+  "streamerbot_action_id": "05d6af77-9ed2-4771-be77-1e666955873d",
   "replacements": {
-    "barry's": "Berries'",
+    "barry's": "Berries",
     "barry": "Berries"
   },
   "model": "large-v3",
