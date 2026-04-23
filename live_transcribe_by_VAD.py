@@ -100,7 +100,7 @@ def main():
     ap.add_argument("-v", "--vad-threshold",        type=float, default=settings.get("vad_threshold", 0.5),     help="VAD probability threshold (0-1). Overrides settings.json.")
     ap.add_argument("-x", "--debug",                action="store_true", default=settings.get("debug", False),  help="Enable verbose debug logging. Overrides settings.json.")
     ap.add_argument("-o", "--output-file",          default=settings.get("output_file", "live_transcript.jsonl"), help="Output JSONL file for transcriptions. Overrides settings.json.")
-    ap.add_argument("--berries-key",                default=settings.get("berries_key", "f9"),                  help="Hotkey to hold for Berries recording (e.g. 'f9', 'scroll_lock'). Overrides settings.json.")
+    ap.add_argument("--berries-key",                default=settings.get("berries_key", "f13"),                  help="Hotkey to hold for Berries recording (e.g. 'f9', 'scroll_lock'). Overrides settings.json.")
     args = ap.parse_args()
 
     if args.list_devices:
