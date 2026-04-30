@@ -25,9 +25,9 @@ The Whisper model weights are downloaded automatically on first run. `large-v3` 
 
 ---
 
-## Configuration
+## Configuration & Usage
 
-All user-facing settings live in `settings.json`. Open it in Notepad (or any text editor) and edit the values — no coding required. Restart the script after saving.
+All settings can be configured in `settings.json` or overridden at runtime with CLI flags. If `settings.json` is missing or broken, the script warns you and falls back to built-in defaults.
 
 ```json
 {
@@ -41,26 +41,23 @@ All user-facing settings live in `settings.json`. Open it in Notepad (or any tex
 }
 ```
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `speaker_name` | `"TwigOtter"` | Your name, sent to StreamerBot with each transcription |
-| `streamerbot_url` | `"http://..."` | The HTTP URL of your StreamerBot webhook |
-| `streamerbot_action_name` | `"LiveTranscribe"` | The name of the StreamerBot action to invoke |
-| `replacements` | `{}` | Words Whisper mishears → what they should say. Matching is case-insensitive; replacement is applied exactly as written. |
-| `model` | `"large-v3"` | Whisper model size. Use `"base"` or `"small"` if running on CPU. |
-| `device_name` | `null` | Substring of your audio input device name. `null` uses the system default. Run `--list-devices` to find yours. |
-| `language` | `"en"` | Language code to force (e.g. `"en"`, `"ja"`). |
-| `compute_type` | `"float16"` | Model precision. Use `"int8"` for CPU. |
-| `sample_rate` | `16000` | Audio sample rate in Hz. |
-| `silence_duration_ms` | `1500` | Milliseconds of silence before transcription is triggered. |
-| `max_buffer_seconds` | `15` | Max seconds of audio to buffer before forcing transcription. |
-| `vad_threshold` | `0.5` | Voice detection sensitivity (0–1). Higher = stricter. |
-| `output_file` | `"live_transcript.jsonl"` | File to write transcription logs to. |
-| `debug` | `false` | Set to `true` for verbose logging. |
-
-If `settings.json` is missing or broken, the script will warn you and fall back to built-in defaults.
-
-### StreamerBot Integration
+| `settings.json` key | CLI flag | Default | Description |
+|---------------------|----------|---------|-------------|
+| `speaker_name` | `-n, --speaker-name` | `"TwigOtter"` | Your name, sent to StreamerBot with each transcription |
+| `streamerbot_url` | `--url` | `"http://..."` | The HTTP URL of your StreamerBot webhook |
+| `streamerbot_action_name` | — | `"LiveTranscribe"` | The name of the StreamerBot action to invoke |
+| `replacements` | — | `{}` | Words Whisper mishears → what they should say. Matching is case-insensitive; replacement is applied exactly as written. |
+| `model` | `-m, --model` | `"large-v3"` | Whisper model size. Use `"base"` or `"small"` if running on CPU. |
+| `device_name` | `-d, --device-name` | `null` | Substring of your audio input device name. `null` uses the system default. Run `--list-devices` to find yours. |
+| — | `-l, --list-devices` | — | Print available input devices and exit |
+| `language` | `--language` | `"en"` | Language code to force (e.g. `"en"`, `"ja"`). |
+| `compute_type` | `-c, --compute-type` | `"float16"` | Model precision (`int8`, `int8_float16`, `float16`, `float32`). Use `"int8"` for CPU. |
+| `sample_rate` | `-r, --sample-rate` | `16000` | Audio sample rate in Hz. |
+| `silence_duration_ms` | `-s, --silence-duration-ms` | `1500` | Milliseconds of silence before transcription is triggered. |
+| `max_buffer_seconds` | `-b, --max-buffer-seconds` | `15` | Max seconds of audio to buffer before forcing transcription. |
+| `vad_threshold` | `-v, --vad-threshold` | `0.5` | Voice detection sensitivity (0–1). Higher = stricter. |
+| `output_file` | `-o, --output-file` | `"live_transcript.jsonl"` | File to write transcription logs to. |
+| `debug` | `-x, --debug` | `false` | Enable verbose debug logging. |
 
 If the StreamerBot endpoint is unreachable the script will print a warning and keep transcribing — it will not crash.
 
@@ -71,22 +68,6 @@ If the StreamerBot endpoint is unreachable the script will print a warning and k
 ```
 python live_transcribe_by_VAD.py [options]
 ```
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `-n, --speaker-name` | from `settings.json` | Speaker name sent to StreamerBot |
-| `--url` | from `settings.json` | StreamerBot webhook URL |
-| `-m, --model` | `large-v3` | Whisper model size (`tiny`, `base`, `small`, `medium`, `large-v3`) |
-| `-d, --device-name` | system default | Substring of the audio input device name |
-| `-l, --list-devices` | — | Print available input devices and exit |
-| `-r, --sample-rate` | `16000` | Audio sample rate in Hz |
-| `--language` | `en` | Force language code (e.g. `en`, `ja`). Auto-detects if omitted |
-| `-c, --compute-type` | `float16` | Model precision (`int8`, `int8_float16`, `float16`, `float32`) |
-| `-s, --silence-duration-ms` | `1500` | Milliseconds of silence required to trigger transcription |
-| `-b, --max-buffer-seconds` | `15` | Max seconds to accumulate before forcing transcription |
-| `-v, --vad-threshold` | `0.5` | VAD sensitivity (0–1, higher = stricter) |
-| `-o, --output-file` | `live_transcript.jsonl` | Output file path |
-| `-x, --debug` | — | Enable verbose debug logging |
 
 ### Common Examples
 
