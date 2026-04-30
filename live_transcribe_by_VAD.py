@@ -15,6 +15,7 @@ import queue
 import re
 import sys
 import threading
+import traceback
 from datetime import datetime
 
 import requests
@@ -102,7 +103,12 @@ def _transcription_worker(
         count += 1
         print(f"\n[transcribe] *** TRANSCRIPTION EVENT #{count} ***", flush=True)
         print(f"[transcribe] Processing {len(pending.audio)/sample_rate:.1f}s of audio…", flush=True)
-        text = transcriber.transcribe(pending.audio)
+        try:
+            text = transcriber.transcribe(pending.audio)
+        except Exception as e:
+            print(f"[transcribe] ERROR during transcription: {e}", file=sys.stderr, flush=True)
+            traceback.print_exc(file=sys.stderr)
+            continue
         if text:
             text = apply_word_replacements(text, word_replacements)
             print(f"[result] {text}")
@@ -127,6 +133,7 @@ def main():
     ap.add_argument("-l", "--list-devices",         action="store_true",                                         help="List input devices and exit.")
     ap.add_argument("-r", "--sample-rate",          type=int,   default=settings.get("sample_rate", 16000),     help="Target sample rate for ASR (Hz). Overrides settings.json.")
     ap.add_argument("--language",                   default=settings.get("language", "en"),                     help="Force language code (e.g., en). Overrides settings.json.")
+    ap.add_argument("--device",                      default=settings.get("device", "auto"),                     help="Inference device: auto, cpu, cuda, or cuda:0 etc. Overrides settings.json.")
     ap.add_argument("-c", "--compute-type",         default=settings.get("compute_type", "float16"),            help="e.g., int8, float16, float32. Overrides settings.json.")
     ap.add_argument("-s", "--silence-duration-ms",  type=float, default=settings.get("silence_duration_ms", 1500.0), help="Duration of silence (ms) to trigger transcription. Overrides settings.json.")
     ap.add_argument("-b", "--max-buffer-seconds",   type=float, default=settings.get("max_buffer_seconds", 15.0),   help="Maximum seconds to accumulate before forcing transcription. Overrides settings.json.")
@@ -150,6 +157,7 @@ def main():
 
     transcriber = Transcriber(
         model_name=args.model,
+        device=args.device,
         compute_type=args.compute_type,
         language=args.language,
         vad_threshold=args.vad_threshold,
