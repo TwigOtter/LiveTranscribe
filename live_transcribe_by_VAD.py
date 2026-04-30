@@ -11,14 +11,16 @@ This produces clean, sentence-based transcriptions with no duplicates.
 
 import argparse
 import json
+import queue
 import re
 import sys
+import threading
 from datetime import datetime
 
 import requests
 import sounddevice as sd
 
-from audio_pipeline import AudioPipeline
+from audio_pipeline import AudioPipeline, PendingAudio
 from transcriber import Transcriber
 
 
@@ -80,6 +82,37 @@ def log_to_jsonl(text: str, file_path: str, speaker: str):
         f.write(json.dumps(entry) + "\n")
 
 
+def _transcription_worker(
+    transcriber: Transcriber,
+    transcription_queue: "queue.Queue[PendingAudio | None]",
+    word_replacements: dict,
+    speaker_name: str,
+    url: str,
+    action_id: str,
+    action_name: str,
+    output_file: str,
+    debug: bool,
+    sample_rate: int,
+):
+    count = 0
+    while True:
+        pending = transcription_queue.get()
+        if pending is None:
+            break
+        count += 1
+        print(f"\n[transcribe] *** TRANSCRIPTION EVENT #{count} ***", flush=True)
+        print(f"[transcribe] Processing {len(pending.audio)/sample_rate:.1f}s of audio…", flush=True)
+        text = transcriber.transcribe(pending.audio)
+        if text:
+            text = apply_word_replacements(text, word_replacements)
+            print(f"[result] {text}")
+            extra = {"berries": "true"} if pending.is_berries else None
+            post_to_streamerbot(text, speaker_name, url, action_id, action_name, extra_args=extra)
+            log_to_jsonl(text, output_file, speaker_name)
+        elif debug:
+            print("[result] No speech detected in accumulated audio.")
+
+
 def main():
     settings = _load_settings()
     word_replacements = settings.get("replacements", {})
@@ -133,37 +166,39 @@ def main():
     )
 
     pipeline.start()
+
+    transcription_queue: queue.Queue[PendingAudio | None] = queue.Queue()
+    worker = threading.Thread(
+        target=_transcription_worker,
+        args=(
+            transcriber,
+            transcription_queue,
+            word_replacements,
+            args.speaker_name,
+            args.url,
+            args.action_id,
+            args.action_name,
+            args.output_file,
+            args.debug,
+            args.sample_rate,
+        ),
+        daemon=True,
+        name="transcription-worker",
+    )
+    worker.start()
     print("[info] Listening… Press Ctrl+C to stop.")
 
     try:
-        transcription_count = 0
         while True:
             pending = pipeline.get_transcription_audio(timeout=1.0)
             if pending is None:
                 continue
-
-            transcription_count += 1
-            print(f"\n[main] *** TRANSCRIPTION EVENT #{transcription_count} ***", flush=True)
-            print(f"[transcribe] Processing {len(pending.audio)/args.sample_rate:.1f}s of audio…", flush=True)
-
-            # TODO: run transcription in a dedicated thread so the pending_queue
-            # drain loop isn't blocked during inference. A backlog builds if VAD
-            # fires again before the current transcribe() call returns — audio is
-            # not lost (pipeline keeps accumulating), but results lag behind.
-            text = transcriber.transcribe(pending.audio)
-
-            if text:
-                text = apply_word_replacements(text, word_replacements)
-                print(f"[result] {text}")
-                extra = {"berries": "true"} if pending.is_berries else None
-                post_to_streamerbot(text, args.speaker_name, args.url, args.action_id, extra_args=extra)
-                log_to_jsonl(text, args.output_file, args.speaker_name)
-            elif args.debug:
-                print("[result] No speech detected in accumulated audio.")
-
+            transcription_queue.put(pending)
     except KeyboardInterrupt:
         print("\n[info] Stopping…")
     finally:
+        transcription_queue.put(None)
+        worker.join(timeout=30)
         pipeline.stop()
 
 
