@@ -3,9 +3,9 @@ from faster_whisper import WhisperModel
 
 
 class Transcriber:
-    def __init__(self, model_name: str, compute_type: str, language: str, vad_threshold: float):
-        print(f"[info] Loading faster-whisper model: {model_name} (compute_type={compute_type}) …")
-        self._model = WhisperModel(model_name, compute_type=compute_type)
+    def __init__(self, model_name: str, compute_type: str, language: str, vad_threshold: float, device: str = "auto"):
+        print(f"[info] Loading faster-whisper model: {model_name} (device={device}, compute_type={compute_type}) …")
+        self._model = WhisperModel(model_name, device=device, compute_type=compute_type)
         self._language = language
         self._vad_threshold = vad_threshold
 
