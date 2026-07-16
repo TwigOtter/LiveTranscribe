@@ -153,7 +153,7 @@ def main():
             if text:
                 text = apply_word_replacements(text, word_replacements)
                 print(f"[result] {text}")
-                extra = {"berries": "true"} if pending.is_berries else None
+                extra = {"berries": "true"} if pending.is_for_berries else None
                 post_to_streamerbot(text, args.speaker_name, args.url, args.action_id, extra_args=extra)
                 log_to_jsonl(text, args.output_file, args.speaker_name)
             elif args.debug:

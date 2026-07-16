@@ -14,7 +14,7 @@ from silero_vad import load_silero_vad, get_speech_timestamps
 @dataclass
 class PendingAudio:
     audio: np.ndarray
-    is_berries: bool
+    is_for_berries: bool
 
 
 class AudioPipeline:
@@ -113,7 +113,7 @@ class AudioPipeline:
         chunks pile up in the pending queue. Each transcribe() call pads its
         input to a full window, so a backlog of tiny chunks costs far more GPU
         time than the same audio in one call. Consecutive chunks with the same
-        is_berries flag are therefore merged and transcribed together.
+        is_for_berries flag are therefore merged and transcribed together.
         """
         if not self._ready:
             try:
@@ -128,7 +128,7 @@ class AudioPipeline:
 
         first = self._ready.popleft()
         chunks = [first.audio]
-        while self._ready and self._ready[0].is_berries == first.is_berries:
+        while self._ready and self._ready[0].is_for_berries == first.is_for_berries:
             chunks.append(self._ready.popleft().audio)
         if len(chunks) == 1:
             return first
@@ -139,7 +139,7 @@ class AudioPipeline:
             f"{len(merged)/self._sample_rate:.1f}s transcription.",
             flush=True,
         )
-        return PendingAudio(audio=merged, is_berries=first.is_berries)
+        return PendingAudio(audio=merged, is_for_berries=first.is_for_berries)
 
     # --- Internal ---
 
@@ -156,7 +156,7 @@ class AudioPipeline:
         if key == self._berries_target_key and not self._hotkey_held.is_set():
             with self._accumulated_audio_lock:
                 if self._speech_detected_in_buffer and len(self._accumulated_audio) > self._min_audio_samples:
-                    self._pending_queue.put(PendingAudio(audio=self._accumulated_audio.copy(), is_berries=False))
+                    self._pending_queue.put(PendingAudio(audio=self._accumulated_audio.copy(), is_for_berries=False))
                 self._accumulated_audio = np.array([], dtype=np.float32)
                 self._speech_detected_in_buffer = False
             self._hotkey_held.set()
@@ -170,7 +170,7 @@ class AudioPipeline:
                 self._accumulated_audio = np.array([], dtype=np.float32)
                 self._speech_detected_in_buffer = False
             if len(audio_snapshot) > self._min_audio_samples:
-                self._pending_queue.put(PendingAudio(audio=audio_snapshot, is_berries=True))
+                self._pending_queue.put(PendingAudio(audio=audio_snapshot, is_for_berries=True))
                 print(f"[hotkey] Released — sending {len(audio_snapshot)/self._sample_rate:.1f}s to Berries.", flush=True)
             else:
                 print("[hotkey] Released — not enough audio to send.", flush=True)
@@ -204,7 +204,7 @@ class AudioPipeline:
                         self._accumulated_audio = np.array([], dtype=np.float32)
                         self._speech_detected_in_buffer = False
                         silence_start_time = None
-                        self._pending_queue.put(PendingAudio(audio=audio_snapshot, is_berries=False))
+                        self._pending_queue.put(PendingAudio(audio=audio_snapshot, is_for_berries=False))
 
             # Periodic VAD silence check — skip during hotkey hold
             now = time.time()
@@ -262,7 +262,7 @@ class AudioPipeline:
                                     self._speech_detected_in_buffer = False
                                     silence_start_time = None
                                     print(f"[vad] Silence detected ({silence_duration_ms:.0f}ms). Triggering transcription.", flush=True)
-                                    self._pending_queue.put(PendingAudio(audio=audio_snapshot, is_berries=False))
+                                    self._pending_queue.put(PendingAudio(audio=audio_snapshot, is_for_berries=False))
                                 else:
                                     if debug:
                                         print(f"[vad-check #{check_count}] No speech in buffer, flushing silence.", flush=True)
