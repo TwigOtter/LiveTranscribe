@@ -146,10 +146,8 @@ def main():
             print(f"\n[main] *** TRANSCRIPTION EVENT #{transcription_count} ***", flush=True)
             print(f"[transcribe] Processing {len(pending.audio)/args.sample_rate:.1f}s of audio…", flush=True)
 
-            # TODO: run transcription in a dedicated thread so the pending_queue
-            # drain loop isn't blocked during inference. A backlog builds if VAD
-            # fires again before the current transcribe() call returns — audio is
-            # not lost (pipeline keeps accumulating), but results lag behind.
+            # Blocking here is fine: anything VAD queues during this call is
+            # coalesced into the next get_transcription_audio() result.
             text = transcriber.transcribe(pending.audio)
 
             if text:

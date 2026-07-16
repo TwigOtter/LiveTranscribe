@@ -2,6 +2,7 @@ import queue
 import sys
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 
 import numpy as np
@@ -38,6 +39,7 @@ class AudioPipeline:
 
         self._audio_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=100)
         self._pending_queue: queue.Queue[PendingAudio] = queue.Queue()
+        self._ready: deque[PendingAudio] = deque()
 
         self._accumulated_audio = np.array([], dtype=np.float32)
         self._accumulated_audio_lock = threading.Lock()
@@ -105,10 +107,39 @@ class AudioPipeline:
                 pass
 
     def get_transcription_audio(self, timeout: float = 1.0) -> PendingAudio | None:
-        try:
-            return self._pending_queue.get(timeout=timeout)
-        except queue.Empty:
-            return None
+        """Return the next audio to transcribe, coalescing any backlog.
+
+        If the consumer falls behind (transcription is slower than speech),
+        chunks pile up in the pending queue. Each transcribe() call pads its
+        input to a full window, so a backlog of tiny chunks costs far more GPU
+        time than the same audio in one call. Consecutive chunks with the same
+        is_berries flag are therefore merged and transcribed together.
+        """
+        if not self._ready:
+            try:
+                self._ready.append(self._pending_queue.get(timeout=timeout))
+            except queue.Empty:
+                return None
+        while True:
+            try:
+                self._ready.append(self._pending_queue.get_nowait())
+            except queue.Empty:
+                break
+
+        first = self._ready.popleft()
+        chunks = [first.audio]
+        while self._ready and self._ready[0].is_berries == first.is_berries:
+            chunks.append(self._ready.popleft().audio)
+        if len(chunks) == 1:
+            return first
+
+        merged = np.concatenate(chunks)
+        print(
+            f"[queue] Coalesced {len(chunks)} backlogged chunks into one "
+            f"{len(merged)/self._sample_rate:.1f}s transcription.",
+            flush=True,
+        )
+        return PendingAudio(audio=merged, is_berries=first.is_berries)
 
     # --- Internal ---
 
