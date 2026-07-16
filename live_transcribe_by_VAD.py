@@ -146,16 +146,14 @@ def main():
             print(f"\n[main] *** TRANSCRIPTION EVENT #{transcription_count} ***", flush=True)
             print(f"[transcribe] Processing {len(pending.audio)/args.sample_rate:.1f}s of audio…", flush=True)
 
-            # TODO: run transcription in a dedicated thread so the pending_queue
-            # drain loop isn't blocked during inference. A backlog builds if VAD
-            # fires again before the current transcribe() call returns — audio is
-            # not lost (pipeline keeps accumulating), but results lag behind.
+            # Blocking here is fine: anything VAD queues during this call is
+            # coalesced into the next get_transcription_audio() result.
             text = transcriber.transcribe(pending.audio)
 
             if text:
                 text = apply_word_replacements(text, word_replacements)
                 print(f"[result] {text}")
-                extra = {"berries": "true"} if pending.is_berries else None
+                extra = {"berries": "true"} if pending.is_for_berries else None
                 post_to_streamerbot(text, args.speaker_name, args.url, args.action_id, extra_args=extra)
                 log_to_jsonl(text, args.output_file, args.speaker_name)
             elif args.debug:
